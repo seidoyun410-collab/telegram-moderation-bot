@@ -3,7 +3,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiohttp import ClientConnectorError, ServerDisconnectedError
 from handlers import register_routes
-from config import TEST_BOT_TOKEN
+from config import BOT_TOKEN
 
 TOKEN = "8672189204:AAGrnnuODcgFbni7TV_LmdGagRN1sowyEVI"
 
