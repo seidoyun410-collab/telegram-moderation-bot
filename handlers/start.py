@@ -1,3 +1,9 @@
+import json
+import os
+from uuid import uuid4
+from datetime import datetime, timedelta
+from html import escape
+
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -9,19 +15,23 @@ from aiogram.types import (
     InlineKeyboardButton,
     InputMediaPhoto
 )
-from html import escape
 
-from .keyboards.menu import main_menu_kb
+from .keyboards.menu import main_menu_kb  # твой существующий файл с главным меню
 
 router = Router()
 
+# -------------------------
 # FSM состояния
+# -------------------------
 class OfferAdStates(StatesGroup):
+    waiting_for_category = State()
     waiting_for_text = State()
     waiting_for_photos = State()
     waiting_for_reply = State()  # для модератора ответа пользователю
 
+# -------------------------
 # Кнопки
+# -------------------------
 cancel_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Отмена")]],
     resize_keyboard=True,
@@ -34,81 +44,187 @@ photo_kb = ReplyKeyboardMarkup(
     one_time_keyboard=True
 )
 
-# ID группы модерации и канала
-MODERATION_GROUP_ID = -1001986951886  # числовой ID группы модерации
-MAIN_CHANNEL_ID = -1001642154296      # числовой ID канала, бот должен быть админом
+# -------------------------
+# Категории
+# -------------------------
+categories_keyboard = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📱 Электроника", callback_data="cat_electronics"),
+            InlineKeyboardButton(text="👕 Одежда", callback_data="cat_clothes")
+        ],
+        [
+            InlineKeyboardButton(text="🪑 Мебель", callback_data="cat_furniture"),
+            InlineKeyboardButton(text="🚗 Авто", callback_data="cat_auto")
+        ],
+        [
+            InlineKeyboardButton(text="🏠 Недвижимость", callback_data="cat_realty"),
+            InlineKeyboardButton(text="💼 Работа", callback_data="cat_job")
+        ],
+        [
+            InlineKeyboardButton(text="🛠 Услуги", callback_data="cat_services"),
+            InlineKeyboardButton(text="🎮 Хобби", callback_data="cat_hobby")
+        ],
+        [
+            InlineKeyboardButton(text="📦 Разное", callback_data="cat_other")
+        ]
+    ]
+)
 
-# Простая база заблокированных пользователей
+# -------------------------
+# ID группы модерации и канала
+# -------------------------
+MODERATION_GROUP_ID = -1001986951886  # числовой ID группы модерации
+MAIN_CHANNEL_ID = 1642154296   # числовой ID канала, бот должен быть админом
+
+# -------------------------
+# Блокировка пользователей
+# -------------------------
 blocked_users = set()
 
-# Хранилище объявлений на модерации
-pending_ads = {}
+# -------------------------
+# JSON хранилище объявлений
+# -------------------------
+ADS_JSON_FILE = "pending_ads.json"
+AD_EXPIRATION_DAYS = 7  # старые объявления удаляются через 7 дней
 
+def cleanup_old_ads(json_ads: dict) -> dict:
+    """Удаляет объявления старше AD_EXPIRATION_DAYS"""
+    now = datetime.now()
+    new_ads = {}
+    for ad_id, ad in json_ads.items():
+        ad_time = datetime.fromisoformat(ad.get("timestamp"))
+        if now - ad_time <= timedelta(days=AD_EXPIRATION_DAYS):
+            new_ads[ad_id] = ad
+    return new_ads
 
+def load_pending_ads():
+    if not os.path.exists(ADS_JSON_FILE):
+        return {}
+    with open(ADS_JSON_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data = cleanup_old_ads(data)
+    save_pending_ads(data)
+    return data
+
+def save_pending_ads(data):
+    data = cleanup_old_ads(data)
+    with open(ADS_JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# -------------------------
 # /start
+# -------------------------
 @router.message(Command("start"))
 async def start_bot(message: types.Message):
     user_name = escape(message.from_user.full_name)
     text = f"""
-Здравствуйте, {user_name}❕
+Здравствуйте, {user_name}! 👋
 
-В данном боте вы можете предложить свое объявление для публикации в <a href="https://t.me/vape_irk38">Вейп Барахолка | Иркутск</a>
+Добро пожаловать в бот предложки канала 
+<a href="https://t.me/baraholka_irk38">Барахолка | Иркутск</a>
 
-Коммерческие посты публикуются только на платной основе, к ним относится:
+Здесь вы можете предложить своё объявление для публикации в канале.
 
 <pre>
-▫️ оптовая продажа  
-▫️ продажа нового товара  
-▫️ продажа одноразок и жидкостей  
-▫️ реклама магазина / вейпшопа
+📦 Продажа вещей
+🔄 Обмен и отдам даром
+🛒 Покупка
 </pre>
 
-Если вы хотите приобрести рекламу, жмите на кнопку "Платные услуги"❗
+Чтобы предложить объявление — нажмите кнопку 
+<b>"Предложить объявление"</b> в меню ниже.
+
+После отправки объявление отправится на модерацию.
+Если всё в порядке — оно будет опубликовано в канале.
+
+❗ Пожалуйста, указывайте:
+• понятное описание товара  
+• стоимость  
+• реальные фотографии
 """
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
 
-
-# "Предложить объявление"
+# -------------------------
+# Предложить объявление → выбор категории
+# -------------------------
 @router.message(F.text == "Предложить объявление")
 async def offer_ad(message: types.Message, state: FSMContext):
     if message.from_user.id in blocked_users:
         await message.answer("Вы заблокированы и не можете отправлять объявления ❌")
         return
-    await message.answer("Круто! Пришли мне текст своего объявления!", reply_markup=cancel_kb)
+    await message.answer("Сначала выбери категорию своего объявления:", reply_markup=categories_keyboard)
+    await state.set_state(OfferAdStates.waiting_for_category)
+
+# -------------------------
+# Выбор категории
+# -------------------------
+@router.callback_query(F.data.startswith("cat_"))
+async def choose_category(callback: types.CallbackQuery, state: FSMContext):
+    category_map = {
+        "cat_electronics": ("📱 Электроника", "электроника"),
+        "cat_clothes": ("👕 Одежда", "одежда"),
+        "cat_furniture": ("🪑 Мебель", "мебель"),
+        "cat_auto": ("🚗 Авто", "авто"),
+        "cat_realty": ("🏠 Недвижимость", "недвижимость"),
+        "cat_job": ("💼 Работа", "работа"),
+        "cat_services": ("🛠 Услуги", "услуги"),
+        "cat_hobby": ("🎮 Хобби", "хобби"),
+        "cat_other": ("📦 Разное", "разное")
+    }
+    category_name, category_tag = category_map.get(callback.data, ("", "other"))
+    await state.update_data(category_name=category_name, category_tag=category_tag)
+    await callback.message.edit_reply_markup()
+    await callback.message.answer(f"Отлично! Ты выбрал категорию: {category_name}\nТеперь пришли текст своего объявления.", reply_markup=cancel_kb)
     await state.set_state(OfferAdStates.waiting_for_text)
+    await callback.answer()
 
-
-# Отмена (из любого состояния)
+# -------------------------
+# Отмена
+# -------------------------
 @router.message(F.text == "Отмена")
 async def cancel_process(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Процесс отменён. Возвращаемся в главное меню.", reply_markup=main_menu_kb())
 
-
-# Получение текста объявления
+# -------------------------
+# Ввод текста объявления
+# -------------------------
 @router.message(OfferAdStates.waiting_for_text)
 async def receive_ad_text(message: types.Message, state: FSMContext):
-    ad_text = f"{message.text}\n\nСвязаться с продавцом @{message.from_user.username or 'username'}"
-    await state.update_data(ad_text=ad_text, photos=[], user_id=message.from_user.id)
-    await message.answer(
-        f"Отлично! Вот текст твоего объявления с контактом:\n\n{ad_text}\n\nТеперь пришли фото объявления. "
-        "Можно прислать несколько фото. Когда закончишь — нажми 'Готово'.",
-        reply_markup=photo_kb
+    data = await state.get_data()
+    category_name = data.get("category_name", "")
+    category_tag = data.get("category_tag", "other")
+    user_contact = f"@{message.from_user.username}" if message.from_user.username else "Написать через Telegram"
+
+    ad_text = (
+        f"{category_name}\n\n"
+        f"📝 <b>Описание</b>:\n{message.text}\n\n"
+        f"👤 <b>Продавец</b>: {user_contact}\n\n"
+        f"#{category_tag} #барахолка_иркутск"
     )
+
+    await state.update_data(ad_text=ad_text, photos=[], user_id=message.from_user.id)
+    await message.answer(f"Отлично! Вот текст твоего объявления:\n\n{ad_text}\n\nТеперь пришли фото объявления (до 10). Когда закончишь — нажми 'Готово'.", reply_markup=photo_kb)
     await state.set_state(OfferAdStates.waiting_for_photos)
 
-
-# Получение фото
+# -------------------------
+# Получение фото (до 10)
+# -------------------------
 @router.message(OfferAdStates.waiting_for_photos, F.photo)
 async def receive_ad_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photos = data.get("photos", [])
-    photos.append(message.photo[-1].file_id)  # добавляем последнее фото (большой размер)
+    if len(photos) >= 10:
+        await message.answer("❌ Максимальное количество фото — 10.")
+        return
+    photos.append(message.photo[-1].file_id)
     await state.update_data(photos=photos)
     await message.answer(f"Фото добавлено! Всего фото: {len(photos)}", reply_markup=photo_kb)
 
-
-# Завершение отправки объявления
+# -------------------------
+# Завершение и сохранение в JSON
+# -------------------------
 @router.message(F.text == "Готово")
 async def finish_ad(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -116,25 +232,30 @@ async def finish_ad(message: types.Message, state: FSMContext):
     photos = data.get("photos", [])
     user_id = data.get("user_id")
 
-    # Определяем, заблокирован пользователь или нет, чтобы кнопка корректно отображалась
+    ad_id = str(uuid4())
+    timestamp = datetime.now().isoformat()
+    json_ads = load_pending_ads()
+    json_ads[ad_id] = {
+        "user_id": user_id,
+        "ad_text": ad_text,
+        "photos": photos,
+        "timestamp": timestamp
+    }
+    save_pending_ads(json_ads)
+
     block_button_text = "Разблокировать" if user_id in blocked_users else "Заблокировать"
     block_callback = "unblock" if user_id in blocked_users else "block"
 
-    # Кнопки модерации
     moderation_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{user_id}"),
+                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{ad_id}"),
                 InlineKeyboardButton(text="Ответить", callback_data=f"reply:{user_id}"),
                 InlineKeyboardButton(text=block_button_text, callback_data=f"{block_callback}:{user_id}")
             ]
         ]
     )
 
-    # Сохраняем объявление для модератора
-    pending_ads[user_id] = {"text": ad_text, "photos": photos}
-
-    # Отправка на модерацию
     if photos:
         media = [InputMediaPhoto(media=photo_id) for photo_id in photos]
         media[0].caption = ad_text
@@ -146,19 +267,21 @@ async def finish_ad(message: types.Message, state: FSMContext):
     await message.answer("Твое объявление отправлено на модерацию ✅", reply_markup=main_menu_kb())
     await state.clear()
 
-
-# Публикация в канал
+# -------------------------
+# Публикация объявления и удаление из JSON
+# -------------------------
 @router.callback_query(F.data.startswith("publish:"))
 async def publish_ad(callback: types.CallbackQuery):
-    user_id = int(callback.data.split(":")[1])
-
-    ad = pending_ads.get(user_id)
+    ad_id = callback.data.split(":")[1]
+    json_ads = load_pending_ads()
+    ad = json_ads.get(ad_id)
     if not ad:
-        await callback.answer("Ошибка: нет данных для публикации!", show_alert=True)
+        await callback.answer("Ошибка: объявление не найдено!", show_alert=True)
         return
 
-    ad_text = ad.get("text")
+    ad_text = ad.get("ad_text")
     photos = ad.get("photos", [])
+    user_id = ad.get("user_id")
 
     try:
         if not photos:
@@ -166,66 +289,17 @@ async def publish_ad(callback: types.CallbackQuery):
         elif len(photos) == 1:
             await callback.bot.send_photo(chat_id=MAIN_CHANNEL_ID, photo=photos[0], caption=ad_text)
         else:
-            media = [InputMediaPhoto(media=photo, caption=ad_text if i == 0 else None) for i, photo in enumerate(photos)]
+            media = [InputMediaPhoto(media=photo, caption=ad_text if i == 0 else None)
+                     for i, photo in enumerate(photos)]
             await callback.bot.send_media_group(chat_id=MAIN_CHANNEL_ID, media=media)
+
+        # удаляем объявление из JSON
+        json_ads.pop(ad_id)
+        save_pending_ads(json_ads)
 
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.bot.send_message(chat_id=MODERATION_GROUP_ID, text="Объявление опубликовано ✅")
         await callback.answer("Объявление опубликовано в канал!")
 
-        pending_ads.pop(user_id, None)
-
     except Exception as e:
         await callback.answer(f"Ошибка при публикации: {e}", show_alert=True)
-
-
-# Ответ модератора пользователю
-@router.callback_query(F.data.startswith("reply:"))
-async def reply_user(callback: types.CallbackQuery, state: FSMContext):
-    user_id = int(callback.data.split(":")[1])
-    await state.update_data(reply_user_id=user_id)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Напиши сообщение пользователю, оно будет отправлено напрямую.")
-    await state.set_state(OfferAdStates.waiting_for_reply)
-    await callback.answer()
-
-
-@router.message(OfferAdStates.waiting_for_reply)
-async def send_reply_to_user(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    user_id = data.get("reply_user_id")
-    await message.bot.send_message(chat_id=user_id, text=f"Модератор: {message.text}")
-    await message.answer("Сообщение отправлено пользователю ✅", reply_markup=main_menu_kb())
-    await state.clear()
-
-
-# Блокировка / Разблокировка пользователя
-@router.callback_query(F.data.startswith("block:") | F.data.startswith("unblock:"))
-async def toggle_block_user(callback: types.CallbackQuery):
-    action, user_id_str = callback.data.split(":")
-    user_id = int(user_id_str)
-
-    if action == "block":
-        blocked_users.add(user_id)
-        new_text = "Разблокировать"
-        new_action = "unblock"
-        result_text = "Пользователь заблокирован 🚫"
-    else:  # unblock
-        blocked_users.discard(user_id)
-        new_text = "Заблокировать"
-        new_action = "block"
-        result_text = "Пользователь разблокирован ✅"
-
-    # Обновляем кнопки в сообщении модерации
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{user_id}"),
-                InlineKeyboardButton(text="Ответить", callback_data=f"reply:{user_id}"),
-                InlineKeyboardButton(text=new_text, callback_data=f"{new_action}:{user_id}")
-            ]
-        ]
-    )
-
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
-    await callback.answer(result_text)

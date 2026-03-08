@@ -3,10 +3,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiohttp import ClientConnectorError, ServerDisconnectedError
 from handlers import register_routes
+from config import TEST_BOT_TOKEN
 
-TOKEN = "8517916697:AAEqL4pQIMXVw04S07qJZrWgq3riABajTVI"
+TOKEN = "8672189204:AAGrnnuODcgFbni7TV_LmdGagRN1sowyEVI"
 
 async def main():
+    #bot = Bot(token=TEST_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     bot = Bot(
         token=TOKEN,
         default=DefaultBotProperties(parse_mode="HTML")  # Для HTML разметки
