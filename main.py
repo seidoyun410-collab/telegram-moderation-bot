@@ -6,7 +6,7 @@ from handlers import register_routes
 from config import BOT_TOKEN
 
 TOKEN = "8672189204:AAGrnnuODcgFbni7TV_LmdGagRN1sowyEVI"
-
+print(f"[DEBUG] Используемый токен: {BOT_TOKEN}")
 async def main():
     #bot = Bot(token=TEST_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     bot = Bot(
