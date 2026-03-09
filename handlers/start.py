@@ -73,17 +73,23 @@ categories_keyboard = InlineKeyboardMarkup(
     ]
 )
 
+# -------------------------
+# ID группы модерации и канала
+# -------------------------
 MODERATION_GROUP_ID = -1001986951886
 MAIN_CHANNEL_ID = -1001642154296
 
+# -------------------------
+# Блокировка пользователей
+# -------------------------
 blocked_users = set()
 
+# -------------------------
+# JSON хранилище объявлений
+# -------------------------
 ADS_JSON_FILE = "pending_ads.json"
 AD_EXPIRATION_DAYS = 7
 
-# -------------------------
-# Работа с JSON объявлениями
-# -------------------------
 def cleanup_old_ads(json_ads: dict) -> dict:
     now = datetime.now()
     new_ads = {}
@@ -134,7 +140,7 @@ async def start_bot(message: types.Message):
 
 ❗ Пожалуйста, указывайте:
 • понятное описание товара  
-• стоимость  
+• цену  
 • реальные фотографии
 """
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
@@ -147,7 +153,10 @@ async def offer_ad(message: types.Message, state: FSMContext):
     if message.from_user.id in blocked_users:
         await message.answer("Вы заблокированы и не можете отправлять объявления ❌")
         return
-    await message.answer("Сначала выбери категорию своего объявления:", reply_markup=categories_keyboard)
+    await message.answer(
+        "Сначала выбери категорию своего объявления:", 
+        reply_markup=categories_keyboard
+    )
     await state.set_state(OfferAdStates.waiting_for_category)
 
 # -------------------------
@@ -166,18 +175,15 @@ async def choose_category(callback: types.CallbackQuery, state: FSMContext):
         "cat_hobby": ("🎮 Хобби", "хобби"),
         "cat_other": ("📦 Разное", "разное")
     }
-
     category_name, category_tag = category_map.get(callback.data, ("", "other"))
-
     await state.update_data(category_name=category_name, category_tag=category_tag)
-
     await callback.message.edit_reply_markup()
-
     await callback.message.answer(
-        f"Категория: {category_name}\n\nВведите заголовок объявления.",
+        f"Категория: {category_name}\n\n"
+        "📝 Введите заголовок объявления.\n"
+        "Пример: iPhone 13 128GB, Диван угловой",
         reply_markup=cancel_kb
     )
-
     await state.set_state(OfferAdStates.waiting_for_title)
     await callback.answer()
 
@@ -187,12 +193,11 @@ async def choose_category(callback: types.CallbackQuery, state: FSMContext):
 @router.message(OfferAdStates.waiting_for_title)
 async def receive_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
-
     await message.answer(
-        "📝 Введите описание объявления.\n❗ Не указывайте цену — она будет указана отдельно.",
+        "📝 Введите описание объявления.\n\n"
+        "Пример: Телефон в отличном состоянии, полный комплект.",
         reply_markup=cancel_kb
     )
-
     await state.set_state(OfferAdStates.waiting_for_description)
 
 # -------------------------
@@ -201,12 +206,10 @@ async def receive_title(message: types.Message, state: FSMContext):
 @router.message(OfferAdStates.waiting_for_description)
 async def receive_description(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text)
-
     await message.answer(
-        "💰 Укажите цену (только число, например: 15000)",
+        "💰 Укажите цену (только число)\nПример: 16000",
         reply_markup=cancel_kb
     )
-
     await state.set_state(OfferAdStates.waiting_for_price)
 
 # -------------------------
@@ -219,7 +222,6 @@ async def receive_price(message: types.Message, state: FSMContext):
         await message.answer("❗ Введите цену только числом, например: 15000")
         return
     await state.update_data(price=price)
-
     await message.answer(
         "Теперь отправьте фото объявления (до 10). Когда закончите — нажмите 'Готово'.",
         reply_markup=photo_kb
@@ -246,7 +248,6 @@ async def receive_ad_photo(message: types.Message, state: FSMContext):
 @router.message(F.text == "Готово")
 async def finish_ad(message: types.Message, state: FSMContext):
     data = await state.get_data()
-
     category_name = data.get("category_name")
     category_tag = data.get("category_tag")
     title = data.get("title")
@@ -260,19 +261,27 @@ async def finish_ad(message: types.Message, state: FSMContext):
         f"{category_name}\n\n"
         f"📦 <b>{title}</b>\n\n"
         f"📝 <b>Описание</b>:\n{description}\n\n"
-        f"💰 <b>Цена</b>:\n{price} ₽\n\n"
+        f"💰 <b>Цена</b>: {price} ₽\n\n"
         f"👤 <b>Продавец</b>: {user_contact}\n\n"
         f"#{category_tag} #барахолка_иркутск"
     )
 
     ad_id = str(uuid4())
     timestamp = datetime.now().isoformat()
+
     json_ads = load_pending_ads()
-    json_ads[ad_id] = {"user_id": user_id, "ad_text": ad_text, "photos": photos, "timestamp": timestamp}
+    json_ads[ad_id] = {
+        "user_id": user_id,
+        "ad_text": ad_text,
+        "photos": photos,
+        "timestamp": timestamp
+    }
     save_pending_ads(json_ads)
 
+    # Кнопки модерации
     block_button_text = "Разблокировать" if user_id in blocked_users else "Заблокировать"
     block_callback = "unblock" if user_id in blocked_users else "block"
+
     moderation_kb = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{ad_id}"),
@@ -293,7 +302,7 @@ async def finish_ad(message: types.Message, state: FSMContext):
     await state.clear()
 
 # -------------------------
-# Модерация: publish, reply, block/unblock
+# Публикация
 # -------------------------
 @router.callback_query(F.data.startswith("publish:"))
 async def publish_ad(callback: types.CallbackQuery):
@@ -303,7 +312,6 @@ async def publish_ad(callback: types.CallbackQuery):
     if not ad:
         await callback.answer("Ошибка: объявление не найдено!", show_alert=True)
         return
-
     ad_text = ad.get("ad_text")
     photos = ad.get("photos", [])
     user_id = ad.get("user_id")
@@ -317,40 +325,32 @@ async def publish_ad(callback: types.CallbackQuery):
             media = [InputMediaPhoto(media=photo, caption=ad_text if i == 0 else None) for i, photo in enumerate(photos)]
             await callback.bot.send_media_group(chat_id=MAIN_CHANNEL_ID, media=media)
 
+        # удаляем объявление из JSON
         json_ads.pop(ad_id)
         save_pending_ads(json_ads)
-
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.bot.send_message(chat_id=MODERATION_GROUP_ID, text="Объявление опубликовано ✅")
-        await callback.answer("Объявление опубликовано в канал!")
-
+        await callback.answer("Объявление опубликовано!")
     except Exception as e:
         await callback.answer(f"Ошибка при публикации: {e}", show_alert=True)
 
 # -------------------------
-# Ответ модератора пользователю
+# Ответить модератором
 # -------------------------
 @router.callback_query(F.data.startswith("reply:"))
 async def reply_user(callback: types.CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split(":")[1])
-    await state.update_data(reply_to_user=user_id)
-    await callback.message.answer("Введите текст ответа пользователю:")
+    await state.update_data(reply_to_user_id=user_id)
+    await callback.message.answer("Напишите ответ пользователю:")
     await state.set_state(OfferAdStates.waiting_for_reply)
     await callback.answer()
 
 @router.message(OfferAdStates.waiting_for_reply)
 async def send_reply(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    user_id = data.get("reply_to_user")
-    if not user_id:
-        await message.answer("Ошибка: пользователь не найден.")
-        await state.clear()
-        return
-    try:
-        await message.bot.send_message(chat_id=user_id, text=f"💬 Сообщение от модератора:\n\n{message.text}")
-        await message.answer("Сообщение отправлено пользователю ✅")
-    except Exception as e:
-        await message.answer(f"Ошибка при отправке сообщения: {e}")
+    user_id = data.get("reply_to_user_id")
+    await message.bot.send_message(chat_id=user_id, text=f"Ответ от модератора:\n\n{message.text}")
+    await message.answer("Ответ отправлен пользователю ✅")
     await state.clear()
 
 # -------------------------
@@ -360,28 +360,20 @@ async def send_reply(message: types.Message, state: FSMContext):
 async def block_user(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     blocked_users.add(user_id)
-    await callback.answer("Пользователь заблокирован ✅")
-    await callback.message.edit_reply_markup(
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{callback.data.split(':')[1]}"),
-                InlineKeyboardButton(text="Ответить", callback_data=f"reply:{user_id}"),
-                InlineKeyboardButton(text="Разблокировать", callback_data=f"unblock:{user_id}")
-            ]]
-        )
-    )
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Пользователь заблокирован ❌")
 
 @router.callback_query(F.data.startswith("unblock:"))
 async def unblock_user(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     blocked_users.discard(user_id)
+    await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Пользователь разблокирован ✅")
-    await callback.message.edit_reply_markup(
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{callback.data.split(':')[1]}"),
-                InlineKeyboardButton(text="Ответить", callback_data=f"reply:{user_id}"),
-                InlineKeyboardButton(text="Заблокировать", callback_data=f"block:{user_id}")
-            ]]
-        )
-    )
+
+# -------------------------
+# Отмена процесса
+# -------------------------
+@router.message(F.text == "Отмена")
+async def cancel_process(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Процесс отменён. Возвращаемся в главное меню.", reply_markup=main_menu_kb())
