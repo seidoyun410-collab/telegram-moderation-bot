@@ -16,7 +16,7 @@ from aiogram.types import (
     InputMediaPhoto
 )
 
-from .keyboards.menu import main_menu_kb  # твой существующий файл с главным меню
+from .keyboards.menu import main_menu_kb
 
 router = Router()
 
@@ -25,9 +25,11 @@ router = Router()
 # -------------------------
 class OfferAdStates(StatesGroup):
     waiting_for_category = State()
-    waiting_for_text = State()
+    waiting_for_title = State()
+    waiting_for_description = State()
+    waiting_for_price = State()
     waiting_for_photos = State()
-    waiting_for_reply = State()  # для модератора ответа пользователю
+    waiting_for_reply = State()
 
 # -------------------------
 # Кнопки
@@ -71,25 +73,16 @@ categories_keyboard = InlineKeyboardMarkup(
     ]
 )
 
-# -------------------------
-# ID группы модерации и канала
-# -------------------------
-MODERATION_GROUP_ID = -1001986951886  # числовой ID группы модерации
-MAIN_CHANNEL_ID = -1001642154296   # числовой ID канала, бот должен быть админом
+MODERATION_GROUP_ID = -1001986951886
+MAIN_CHANNEL_ID = -1001642154296
 
-# -------------------------
-# Блокировка пользователей
-# -------------------------
 blocked_users = set()
 
-# -------------------------
-# JSON хранилище объявлений
-# -------------------------
 ADS_JSON_FILE = "pending_ads.json"
-AD_EXPIRATION_DAYS = 7  # старые объявления удаляются через 7 дней
+AD_EXPIRATION_DAYS = 7
+
 
 def cleanup_old_ads(json_ads: dict) -> dict:
-    """Удаляет объявления старше AD_EXPIRATION_DAYS"""
     now = datetime.now()
     new_ads = {}
     for ad_id, ad in json_ads.items():
@@ -97,6 +90,7 @@ def cleanup_old_ads(json_ads: dict) -> dict:
         if now - ad_time <= timedelta(days=AD_EXPIRATION_DAYS):
             new_ads[ad_id] = ad
     return new_ads
+
 
 def load_pending_ads():
     if not os.path.exists(ADS_JSON_FILE):
@@ -106,6 +100,7 @@ def load_pending_ads():
     data = cleanup_old_ads(data)
     save_pending_ads(data)
     return data
+
 
 def save_pending_ads(data):
     data = cleanup_old_ads(data)
@@ -146,7 +141,7 @@ async def start_bot(message: types.Message):
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
 
 # -------------------------
-# Предложить объявление → выбор категории
+# Предложить объявление
 # -------------------------
 @router.message(F.text == "Предложить объявление")
 async def offer_ad(message: types.Message, state: FSMContext):
@@ -172,86 +167,140 @@ async def choose_category(callback: types.CallbackQuery, state: FSMContext):
         "cat_hobby": ("🎮 Хобби", "хобби"),
         "cat_other": ("📦 Разное", "разное")
     }
+
     category_name, category_tag = category_map.get(callback.data, ("", "other"))
+
     await state.update_data(category_name=category_name, category_tag=category_tag)
+
     await callback.message.edit_reply_markup()
-    await callback.message.answer(f"Отлично! Ты выбрал категорию: {category_name}\nТеперь пришли текст своего объявления.", reply_markup=cancel_kb)
-    await state.set_state(OfferAdStates.waiting_for_text)
+
+    await callback.message.answer(
+        f"Категория: {category_name}\n\nВведите заголовок объявления.\n\n"
+        "Например:\n"
+        "iPhone 13 128GB\n"
+        "PlayStation 5\n"
+        "Диван угловой",
+        reply_markup=cancel_kb
+    )
+
+    await state.set_state(OfferAdStates.waiting_for_title)
     await callback.answer()
 
 # -------------------------
-# Отмена
+# Заголовок
 # -------------------------
-@router.message(F.text == "Отмена")
-async def cancel_process(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Процесс отменён. Возвращаемся в главное меню.", reply_markup=main_menu_kb())
+@router.message(OfferAdStates.waiting_for_title)
+async def receive_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text)
 
-# -------------------------
-# Ввод текста объявления
-# -------------------------
-@router.message(OfferAdStates.waiting_for_text)
-async def receive_ad_text(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    category_name = data.get("category_name", "")
-    category_tag = data.get("category_tag", "other")
-    user_contact = f"@{message.from_user.username}" if message.from_user.username else "Написать через Telegram"
-
-    ad_text = (
-        f"{category_name}\n\n"
-        f"📝 <b>Описание</b>:\n{message.text}\n\n"
-        f"👤 <b>Продавец</b>: {user_contact}\n\n"
-        f"#{category_tag} #барахолка_иркутск"
+    await message.answer(
+        "📝 Введите описание объявления.\n\n"
+        "Например:\n"
+        "Телефон в отличном состоянии, полный комплект.\n\n"
+        "❗ Не указывайте здесь цену — она будет указана отдельно.",
+        reply_markup=cancel_kb
     )
 
-    await state.update_data(ad_text=ad_text, photos=[], user_id=message.from_user.id)
-    await message.answer(f"Отлично! Вот текст твоего объявления:\n\n{ad_text}\n\nТеперь пришли фото объявления (до 10). Когда закончишь — нажми 'Готово'.", reply_markup=photo_kb)
+    await state.set_state(OfferAdStates.waiting_for_description)
+
+# -------------------------
+# Описание
+# -------------------------
+@router.message(OfferAdStates.waiting_for_description)
+async def receive_description(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text)
+
+    await message.answer(
+        "💰 Укажите цену (только число)\n\nНапример:\n16000",
+        reply_markup=cancel_kb
+    )
+
+    await state.set_state(OfferAdStates.waiting_for_price)
+
+# -------------------------
+# Цена
+# -------------------------
+@router.message(OfferAdStates.waiting_for_price)
+async def receive_price(message: types.Message, state: FSMContext):
+    price = message.text.strip()
+
+    if not price.isdigit():
+        await message.answer("❗ Введите цену только числом, например: 15000")
+        return
+
+    await state.update_data(price=price)
+
+    await message.answer(
+        "Теперь отправьте фото объявления (до 10). Когда закончите — нажмите 'Готово'.",
+        reply_markup=photo_kb
+    )
+
     await state.set_state(OfferAdStates.waiting_for_photos)
 
 # -------------------------
-# Получение фото (до 10)
+# Фото
 # -------------------------
 @router.message(OfferAdStates.waiting_for_photos, F.photo)
 async def receive_ad_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photos = data.get("photos", [])
+
     if len(photos) >= 10:
         await message.answer("❌ Максимальное количество фото — 10.")
         return
+
     photos.append(message.photo[-1].file_id)
     await state.update_data(photos=photos)
+
     await message.answer(f"Фото добавлено! Всего фото: {len(photos)}", reply_markup=photo_kb)
 
 # -------------------------
-# Завершение и сохранение в JSON
+# Завершение объявления
 # -------------------------
 @router.message(F.text == "Готово")
 async def finish_ad(message: types.Message, state: FSMContext):
+
     data = await state.get_data()
-    ad_text = data.get("ad_text")
+
+    category_name = data.get("category_name")
+    category_tag = data.get("category_tag")
+
+    title = data.get("title")
+    description = data.get("description")
+    price = data.get("price")
+
     photos = data.get("photos", [])
-    user_id = data.get("user_id")
+    user_id = data.get("user_id", message.from_user.id)
+
+    user_contact = f"@{message.from_user.username}" if message.from_user.username else "Написать через Telegram"
+
+    ad_text = (
+        f"{category_name}\n\n"
+        f"📦 <b>{title}</b>\n\n"
+        f"📝 <b>Описание</b>:\n{description}\n\n"
+        f"💰 <b>Цена</b>:\n{price} ₽\n\n"
+        f"👤 <b>Продавец</b>: {user_contact}\n\n"
+        f"#{category_tag} #барахолка_иркутск"
+    )
 
     ad_id = str(uuid4())
     timestamp = datetime.now().isoformat()
+
     json_ads = load_pending_ads()
+
     json_ads[ad_id] = {
         "user_id": user_id,
         "ad_text": ad_text,
         "photos": photos,
         "timestamp": timestamp
     }
-    save_pending_ads(json_ads)
 
-    block_button_text = "Разблокировать" if user_id in blocked_users else "Заблокировать"
-    block_callback = "unblock" if user_id in blocked_users else "block"
+    save_pending_ads(json_ads)
 
     moderation_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{ad_id}"),
-                InlineKeyboardButton(text="Ответить", callback_data=f"reply:{user_id}"),
-                InlineKeyboardButton(text=block_button_text, callback_data=f"{block_callback}:{user_id}")
+                InlineKeyboardButton(text="Опубликовать", callback_data=f"publish:{ad_id}")
             ]
         ]
     )
@@ -259,47 +308,28 @@ async def finish_ad(message: types.Message, state: FSMContext):
     if photos:
         media = [InputMediaPhoto(media=photo_id) for photo_id in photos]
         media[0].caption = ad_text
-        await message.bot.send_media_group(chat_id=MODERATION_GROUP_ID, media=media)
-        await message.bot.send_message(chat_id=MODERATION_GROUP_ID, text="Действия для модерации:", reply_markup=moderation_kb)
+
+        await message.bot.send_media_group(
+            chat_id=MODERATION_GROUP_ID,
+            media=media
+        )
+
+        await message.bot.send_message(
+            chat_id=MODERATION_GROUP_ID,
+            text="Действия для модерации:",
+            reply_markup=moderation_kb
+        )
+
     else:
-        await message.bot.send_message(chat_id=MODERATION_GROUP_ID, text=ad_text, reply_markup=moderation_kb)
+        await message.bot.send_message(
+            chat_id=MODERATION_GROUP_ID,
+            text=ad_text,
+            reply_markup=moderation_kb
+        )
 
-    await message.answer("Твое объявление отправлено на модерацию ✅", reply_markup=main_menu_kb())
+    await message.answer(
+        "Твое объявление отправлено на модерацию ✅",
+        reply_markup=main_menu_kb()
+    )
+
     await state.clear()
-
-# -------------------------
-# Публикация объявления и удаление из JSON
-# -------------------------
-@router.callback_query(F.data.startswith("publish:"))
-async def publish_ad(callback: types.CallbackQuery):
-    ad_id = callback.data.split(":")[1]
-    json_ads = load_pending_ads()
-    ad = json_ads.get(ad_id)
-    if not ad:
-        await callback.answer("Ошибка: объявление не найдено!", show_alert=True)
-        return
-
-    ad_text = ad.get("ad_text")
-    photos = ad.get("photos", [])
-    user_id = ad.get("user_id")
-
-    try:
-        if not photos:
-            await callback.bot.send_message(chat_id=MAIN_CHANNEL_ID, text=ad_text)
-        elif len(photos) == 1:
-            await callback.bot.send_photo(chat_id=MAIN_CHANNEL_ID, photo=photos[0], caption=ad_text)
-        else:
-            media = [InputMediaPhoto(media=photo, caption=ad_text if i == 0 else None)
-                     for i, photo in enumerate(photos)]
-            await callback.bot.send_media_group(chat_id=MAIN_CHANNEL_ID, media=media)
-
-        # удаляем объявление из JSON
-        json_ads.pop(ad_id)
-        save_pending_ads(json_ads)
-
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.bot.send_message(chat_id=MODERATION_GROUP_ID, text="Объявление опубликовано ✅")
-        await callback.answer("Объявление опубликовано в канал!")
-
-    except Exception as e:
-        await callback.answer(f"Ошибка при публикации: {e}", show_alert=True)
